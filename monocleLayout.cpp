@@ -3,6 +3,7 @@
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
+#include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/decorations/CHyprGroupBarDecoration.hpp>
 #include <format>
 #include <hyprland/src/render/decorations/IHyprWindowDecoration.hpp>
@@ -32,28 +33,28 @@ std::string CHyprMonocleLayout::getLayoutName() {
 }
 
 void CHyprMonocleLayout::onWindowCreatedTiling(PHLWINDOW pWindow, eDirection direction) {
-    if (pWindow->m_bIsFloating)
+    if (pWindow->m_isFloating)
         return;
 
 		const auto WSID = pWindow->workspaceID();
-    const auto PWORKSPACE = pWindow->m_pWorkspace;
+    const auto PWORKSPACE = pWindow->m_workspace;
 		
 			
-    const auto         PMONITOR = pWindow->m_pMonitor.lock(); 
+    const auto         PMONITOR = pWindow->m_monitor.lock(); 
 
-    auto               OPENINGON = g_pCompositor->m_pLastWindow.lock() && g_pCompositor->m_pLastWindow.lock()->m_pWorkspace == pWindow->m_pWorkspace ? g_pCompositor->m_pLastWindow.lock() : nullptr;
+    auto               OPENINGON = g_pCompositor->m_lastWindow.lock() && g_pCompositor->m_lastWindow.lock()->m_workspace == pWindow->m_workspace ? g_pCompositor->m_lastWindow.lock() : nullptr;
 
 		const auto				MOUSECOORDS = g_pInputManager->getMouseCoordsInternal();
 		
 
 
 
-		if (g_pInputManager->m_bWasDraggingWindow && OPENINGON) {
+		if (g_pInputManager->m_wasDraggingWindow && OPENINGON) {
 			if (pWindow->checkInputOnDecos(INPUT_TYPE_DRAG_END, MOUSECOORDS, pWindow))
 				return;
 		}
 
-    if (OPENINGON && OPENINGON != pWindow && OPENINGON->m_sGroupData.pNextWindow.lock() // target is group
+    if (OPENINGON && OPENINGON != pWindow && OPENINGON->m_groupData.pNextWindow.lock() // target is group
         && pWindow->canBeGroupedInto(OPENINGON)) {
 
 
@@ -65,7 +66,7 @@ void CHyprMonocleLayout::onWindowCreatedTiling(PHLWINDOW pWindow, eDirection dir
         pWindow->updateWindowDecos();
         recalculateWindow(pWindow);
         if(!pWindow->getDecorationByType(DECORATION_GROUPBAR))
-			      pWindow->addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(pWindow));
+			      pWindow->addWindowDeco(makeUnique<CHyprGroupBarDecoration>(pWindow));
 
         return;
     }
@@ -74,7 +75,7 @@ void CHyprMonocleLayout::onWindowCreatedTiling(PHLWINDOW pWindow, eDirection dir
     const auto PNODE = &m_lMonocleNodesData.emplace_front();
 	  PNODE->workspaceID = pWindow->workspaceID();
 	  PNODE->pWindow = pWindow;
-    if (PWORKSPACE->m_bHasFullscreenWindow) {
+    if (PWORKSPACE->m_hasFullscreenWindow) {
 	      g_pCompositor->setWindowFullscreenInternal(PWORKSPACE->getFullscreenWindow(), FSMODE_FULLSCREEN);
     }
 
@@ -108,15 +109,15 @@ void CHyprMonocleLayout::recalculateMonitor(const MONITORID& monid) {
     if (!PMONITOR)
       return;
 
-    const auto PWORKSPACE = PMONITOR->activeWorkspace;
+    const auto PWORKSPACE = PMONITOR->m_activeWorkspace;
 
     if (!PWORKSPACE)
         return;
 
     g_pHyprRenderer->damageMonitor(PMONITOR);
 
-    if (PMONITOR->activeSpecialWorkspace) {
-        calculateWorkspace(PMONITOR->activeSpecialWorkspace);
+    if (PMONITOR->m_activeSpecialWorkspace) {
+        calculateWorkspace(PMONITOR->m_activeSpecialWorkspace);
     }
 
     // calc the WS
@@ -128,8 +129,8 @@ void CHyprMonocleLayout::calculateWorkspace(PHLWORKSPACE PWORKSPACE) {
         return;
 
     const auto         PMONITOR = g_pCompositor->getMonitorFromID(PWORKSPACE->monitorID());
-    if (PWORKSPACE->m_bHasFullscreenWindow) {
-        if (PWORKSPACE->m_efFullscreenMode == FSMODE_FULLSCREEN)
+    if (PWORKSPACE->m_hasFullscreenWindow) {
+        if (PWORKSPACE->m_fullscreenMode == FSMODE_FULLSCREEN)
             return;
 
         // massive hack from the fullscreen func
@@ -137,11 +138,11 @@ void CHyprMonocleLayout::calculateWorkspace(PHLWORKSPACE PWORKSPACE) {
 
         SMonocleNodeData fakeNode;
         fakeNode.pWindow         = PFULLWINDOW;
-        fakeNode.position        = PMONITOR->vecPosition + PMONITOR->vecReservedTopLeft;
-        fakeNode.size            = PMONITOR->vecSize - PMONITOR->vecReservedTopLeft - PMONITOR->vecReservedBottomRight;
-        fakeNode.workspaceID     = PWORKSPACE->m_iID;
-        PFULLWINDOW->m_vPosition = fakeNode.position;
-        PFULLWINDOW->m_vSize     = fakeNode.size;
+        fakeNode.position        = PMONITOR->m_position + PMONITOR->m_reservedTopLeft;
+        fakeNode.size            = PMONITOR->m_size - PMONITOR->m_reservedTopLeft - PMONITOR->m_reservedBottomRight;
+        fakeNode.workspaceID     = PWORKSPACE->m_id;
+        PFULLWINDOW->m_position  = fakeNode.position;
+        PFULLWINDOW->m_size      = fakeNode.size;
 
         applyNodeDataToWindow(&fakeNode);
 
@@ -149,10 +150,10 @@ void CHyprMonocleLayout::calculateWorkspace(PHLWORKSPACE PWORKSPACE) {
     }
 
 	  for(auto &md : m_lMonocleNodesData) {
-        if (md.workspaceID != PWORKSPACE->m_iID)
+        if (md.workspaceID != PWORKSPACE->m_id)
 			    continue;
-		   	md.position = PMONITOR->vecPosition  + PMONITOR->vecReservedTopLeft + Vector2D(0.0f, 0.0f);
-		    md.size = Vector2D(PMONITOR->vecSize.x - PMONITOR->vecReservedBottomRight.x - PMONITOR->vecReservedTopLeft.x, PMONITOR->vecSize.y - PMONITOR->vecReservedBottomRight.y - PMONITOR->vecReservedTopLeft.y);
+		   	md.position = PMONITOR->m_position  + PMONITOR->m_reservedTopLeft + Vector2D(0.0f, 0.0f);
+		    md.size = Vector2D(PMONITOR->m_size.x - PMONITOR->m_reservedBottomRight.x - PMONITOR->m_reservedTopLeft.x, PMONITOR->m_size.y - PMONITOR->m_reservedBottomRight.y - PMONITOR->m_reservedTopLeft.y);
 		    applyNodeDataToWindow(&md);
   	}
 }
@@ -161,14 +162,14 @@ void CHyprMonocleLayout::applyNodeDataToWindow(SMonocleNodeData* pNode) {
     PHLMONITOR PMONITOR = nullptr;
 
     if (g_pCompositor->isWorkspaceSpecial(pNode->workspaceID)) {
-        for (auto& m : g_pCompositor->m_vMonitors) {
+        for (auto& m : g_pCompositor->m_monitors) {
             if (m->activeSpecialWorkspaceID() == pNode->workspaceID) {
                 PMONITOR = m;
                 break;
             }
         }
     } else {
-        PMONITOR = g_pCompositor->getWorkspaceByID(pNode->workspaceID)->m_pMonitor.lock(); 
+        PMONITOR = g_pCompositor->getWorkspaceByID(pNode->workspaceID)->m_monitor.lock(); 
     }
 
     if (!PMONITOR) {
@@ -177,10 +178,10 @@ void CHyprMonocleLayout::applyNodeDataToWindow(SMonocleNodeData* pNode) {
     }
 
     // for gaps outer
-    const bool DISPLAYLEFT   = STICKS(pNode->position.x, PMONITOR->vecPosition.x + PMONITOR->vecReservedTopLeft.x);
-    const bool DISPLAYRIGHT  = STICKS(pNode->position.x + pNode->size.x, PMONITOR->vecPosition.x + PMONITOR->vecSize.x - PMONITOR->vecReservedBottomRight.x);
-    const bool DISPLAYTOP    = STICKS(pNode->position.y, PMONITOR->vecPosition.y + PMONITOR->vecReservedTopLeft.y);
-    const bool DISPLAYBOTTOM = STICKS(pNode->position.y + pNode->size.y, PMONITOR->vecPosition.y + PMONITOR->vecSize.y - PMONITOR->vecReservedBottomRight.y);
+    const bool DISPLAYLEFT   = STICKS(pNode->position.x, PMONITOR->m_position.x + PMONITOR->m_reservedTopLeft.x);
+    const bool DISPLAYRIGHT  = STICKS(pNode->position.x + pNode->size.x, PMONITOR->m_position.x + PMONITOR->m_size.x - PMONITOR->m_reservedBottomRight.x);
+    const bool DISPLAYTOP    = STICKS(pNode->position.y, PMONITOR->m_position.y + PMONITOR->m_reservedTopLeft.y);
+    const bool DISPLAYBOTTOM = STICKS(pNode->position.y + pNode->size.y, PMONITOR->m_position.y + PMONITOR->m_size.y - PMONITOR->m_reservedBottomRight.y);
 
     const auto PWINDOW = pNode->pWindow.lock();
 		const auto WORKSPACERULE = g_pConfigManager->getWorkspaceRuleFor(g_pCompositor->getWorkspaceByID(PWINDOW->workspaceID()));
@@ -213,18 +214,18 @@ void CHyprMonocleLayout::applyNodeDataToWindow(SMonocleNodeData* pNode) {
     }
 
 
-    PWINDOW->m_vSize     = pNode->size;
-    PWINDOW->m_vPosition = pNode->position;
+    PWINDOW->m_size     = pNode->size;
+    PWINDOW->m_position = pNode->position;
 
-    //auto calcPos  = PWINDOW->m_vPosition + Vector2D(*PBORDERSIZE, *PBORDERSIZE);
-    //auto calcSize = PWINDOW->m_vSize - Vector2D(2 * *PBORDERSIZE, 2 * *PBORDERSIZE);
+    //auto calcPos  = PWINDOW->m_position + Vector2D(*PBORDERSIZE, *PBORDERSIZE);
+    //auto calcSize = PWINDOW->m_size - Vector2D(2 * *PBORDERSIZE, 2 * *PBORDERSIZE);
 
-    auto       calcPos  = PWINDOW->m_vPosition;
-    auto       calcSize = PWINDOW->m_vSize;
+    auto       calcPos  = PWINDOW->m_position;
+    auto       calcSize = PWINDOW->m_size;
 
-    const auto OFFSETTOPLEFT = Vector2D((double)(DISPLAYLEFT ? gapsOut.left : gapsIn.left), (double)(DISPLAYTOP ? gapsOut.top : gapsIn.top));
+    const auto OFFSETTOPLEFT = Vector2D((double)(DISPLAYLEFT ? gapsOut.m_left : gapsIn.m_left), (double)(DISPLAYTOP ? gapsOut.m_top : gapsIn.m_top));
 
-    const auto OFFSETBOTTOMRIGHT = Vector2D((double)(DISPLAYRIGHT ? gapsOut.right : gapsIn.right), (double)(DISPLAYBOTTOM ? gapsOut.bottom : gapsIn.bottom));
+    const auto OFFSETBOTTOMRIGHT = Vector2D((double)(DISPLAYRIGHT ? gapsOut.m_right : gapsIn.m_right), (double)(DISPLAYBOTTOM ? gapsOut.m_bottom : gapsIn.m_bottom));
 
     calcPos  = calcPos + OFFSETTOPLEFT;
     calcSize = calcSize - OFFSETTOPLEFT - OFFSETBOTTOMRIGHT;
@@ -233,17 +234,17 @@ void CHyprMonocleLayout::applyNodeDataToWindow(SMonocleNodeData* pNode) {
     calcPos             = calcPos + RESERVED.topLeft;
     calcSize            = calcSize - (RESERVED.topLeft + RESERVED.bottomRight);
 
-		CBox wb = {calcPos, calcSize};
+		CBox wb = CBox(calcPos, calcSize);
 		wb.round();
-      PWINDOW->m_vRealSize     = wb.size(); 
-      PWINDOW->m_vRealPosition = wb.pos(); 
-      g_pXWaylandManager->setWindowSize(PWINDOW, calcSize);
+      *PWINDOW->m_realSize     = wb.size(); 
+      *PWINDOW->m_realPosition = wb.pos(); 
+      PWINDOW->sendWindowSize();
 
     if (m_bForceWarps && !**PANIMATE) {
         g_pHyprRenderer->damageWindow(PWINDOW);
 
-        PWINDOW->m_vRealPosition.warp();
-        PWINDOW->m_vRealSize.warp();
+        PWINDOW->m_realPosition->warp();
+        PWINDOW->m_realSize->warp();
 
         g_pHyprRenderer->damageWindow(PWINDOW);
     }
@@ -260,15 +261,15 @@ void CHyprMonocleLayout::resizeActiveWindow(const Vector2D& pixResize, eRectCorn
 void CHyprMonocleLayout::fullscreenRequestForWindow(PHLWINDOW pWindow, const eFullscreenMode CURRENT_EFFECTIVE_MODE, const eFullscreenMode EFFECTIVE_MODE) {
     if (!pWindow)
       return;
-    const auto PMONITOR   = pWindow->m_pMonitor.lock(); 
-    const auto PWORKSPACE = pWindow->m_pWorkspace;
+    const auto PMONITOR   = pWindow->m_monitor.lock(); 
+    const auto PWORKSPACE = pWindow->m_workspace;
 
     // save position and size if floating
-    if (pWindow->m_bIsFloating && CURRENT_EFFECTIVE_MODE == FSMODE_NONE) {
-        pWindow->m_vLastFloatingSize     = pWindow->m_vRealSize.goal();
-        pWindow->m_vLastFloatingPosition = pWindow->m_vRealPosition.goal();
-        pWindow->m_vPosition             = pWindow->m_vRealPosition.goal();
-        pWindow->m_vSize                 = pWindow->m_vRealSize.goal();
+    if (pWindow->m_isFloating && CURRENT_EFFECTIVE_MODE == FSMODE_NONE) {
+        pWindow->m_lastFloatingSize     = pWindow->m_realSize->goal();
+        pWindow->m_lastFloatingPosition = pWindow->m_realPosition->goal();
+        pWindow->m_position             = pWindow->m_realPosition->goal();
+        pWindow->m_size                 = pWindow->m_realSize->goal();
     }
 
     if (EFFECTIVE_MODE == FSMODE_NONE) {
@@ -278,8 +279,8 @@ void CHyprMonocleLayout::fullscreenRequestForWindow(PHLWINDOW pWindow, const eFu
             applyNodeDataToWindow(PNODE);
         else {
             // get back its' dimensions from position and size
-            pWindow->m_vRealPosition = pWindow->m_vLastFloatingPosition;
-            pWindow->m_vRealSize     = pWindow->m_vLastFloatingSize;
+            *pWindow->m_realPosition = pWindow->m_lastFloatingPosition;
+            *pWindow->m_realSize     = pWindow->m_lastFloatingSize;
 
             pWindow->unsetWindowData(PRIORITY_LAYOUT);
             pWindow->updateWindowData();
@@ -287,8 +288,8 @@ void CHyprMonocleLayout::fullscreenRequestForWindow(PHLWINDOW pWindow, const eFu
     } else {
         // apply new pos and size being monitors' box
         if (EFFECTIVE_MODE == FSMODE_FULLSCREEN) {
-            pWindow->m_vRealPosition = PMONITOR->vecPosition;
-            pWindow->m_vRealSize     = PMONITOR->vecSize;
+            *pWindow->m_realPosition = PMONITOR->m_position;
+            *pWindow->m_realSize     = PMONITOR->m_size;
         } else {
             // This is a massive hack.
             // We make a fake "only" node and apply
@@ -296,11 +297,11 @@ void CHyprMonocleLayout::fullscreenRequestForWindow(PHLWINDOW pWindow, const eFu
 
             SMonocleNodeData fakeNode;
             fakeNode.pWindow                = pWindow;
-            fakeNode.position               = PMONITOR->vecPosition + PMONITOR->vecReservedTopLeft;
-            fakeNode.size                   = PMONITOR->vecSize - PMONITOR->vecReservedTopLeft - PMONITOR->vecReservedBottomRight;
+            fakeNode.position               = PMONITOR->m_position + PMONITOR->m_reservedTopLeft;
+            fakeNode.size                   = PMONITOR->m_size - PMONITOR->m_reservedTopLeft - PMONITOR->m_reservedBottomRight;
             fakeNode.workspaceID            = pWindow->workspaceID();
-            pWindow->m_vPosition            = fakeNode.position;
-            pWindow->m_vSize                = fakeNode.size;
+            pWindow->m_position             = fakeNode.position;
+            pWindow->m_size                 = fakeNode.size;
             fakeNode.ignoreFullscreenChecks = true;
 
             applyNodeDataToWindow(&fakeNode);
@@ -353,8 +354,8 @@ void CHyprMonocleLayout::switchWindows(PHLWINDOW pWindow, PHLWINDOW pWindow2) {
     const auto inheritFullscreen = prepareLoseFocus(pWindow);
 
     if (PNODE->workspaceID != PNODE2->workspaceID) {
-        std::swap(pWindow2->m_pMonitor, pWindow->m_pMonitor);
-        std::swap(pWindow2->m_pWorkspace, pWindow->m_pWorkspace);
+        std::swap(pWindow2->m_monitor, pWindow->m_monitor);
+        std::swap(pWindow2->m_workspace, pWindow->m_workspace);
     }
 
     // massive hack: just swap window pointers, lol
@@ -389,7 +390,7 @@ void CHyprMonocleLayout::prepareNewFocus(PHLWINDOW pWindow, bool inheritFullscre
 
 	  Debug::log(LOG, "PREPARE NEW FOCUS {}", pWindow);
     if (inheritFullscreen)
-        g_pCompositor->setWindowFullscreenInternal(pWindow, g_pCompositor->getWorkspaceByID(pWindow->workspaceID())->m_efFullscreenMode);
+        g_pCompositor->setWindowFullscreenInternal(pWindow, g_pCompositor->getWorkspaceByID(pWindow->workspaceID())->m_fullscreenMode);
 }
 
 std::any CHyprMonocleLayout::layoutMessage(SLayoutMessageHeader header, std::string message) {
@@ -409,13 +410,13 @@ void CHyprMonocleLayout::moveWindowTo(PHLWINDOW pWindow, const std::string& dir,
 	  pWindow->setAnimationsToMove();
 	  
 
-		if (pWindow->m_pWorkspace != PWINDOW2->m_pWorkspace) {
+		if (pWindow->m_workspace != PWINDOW2->m_workspace) {
  			// if different monitors, send to monitor
 			onWindowRemovedTiling(pWindow);
-			pWindow->moveToWorkspace(PWINDOW2->m_pWorkspace);
-			pWindow->m_pMonitor = PWINDOW2->m_pMonitor;
+			pWindow->moveToWorkspace(PWINDOW2->m_workspace);
+			pWindow->m_monitor = PWINDOW2->m_monitor;
 			if (!silent) {
-				const auto pMonitor = pWindow->m_pMonitor.lock();
+				const auto pMonitor = pWindow->m_monitor.lock();
 				g_pCompositor->setActiveMonitor(pMonitor);
 			}
 			onWindowCreatedTiling(pWindow);
@@ -435,8 +436,8 @@ void CHyprMonocleLayout::replaceWindowDataWith(PHLWINDOW from, PHLWINDOW to) {
 }
 
 void CHyprMonocleLayout::onEnable() {
-    for (auto& w : g_pCompositor->m_vWindows) {
-        if (w->m_bIsFloating || !w->m_bIsMapped || w->isHidden())
+    for (auto& w : g_pCompositor->m_windows) {
+        if (w->m_isFloating || !w->m_isMapped || w->isHidden())
             continue;
 
         onWindowCreatedTiling(w);
@@ -452,5 +453,3 @@ Vector2D CHyprMonocleLayout::predictSizeForNewWindowTiled() {
 	//What the fuck is this shit. Seriously.
 	return {};
 }
-
-
